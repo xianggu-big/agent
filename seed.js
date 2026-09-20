@@ -140,6 +140,10 @@ async function main() {
     SELECT ?, id, 0, IF(RAND()<0.05,1,0), FLOOR(RAND()*6), FLOOR(RAND()*2), FLOOR(RAND()*2), ?
     FROM questions WHERE user_id=? AND id LIKE 'perfq_%' AND CAST(SUBSTRING(id,7) AS UNSIGNED) % 2 = 0 LIMIT 50000`,
     [uid, Date.now(), uid]);
+  /* 回填 prio：与迁移 012 完全同一口径。种子数据是直接写 last_right/attempts 的，
+   * 不补这一步 prio 会全停在默认值 1，排序就不对了（这个坑在造数据时真踩到过）。 */
+  await db.q(`UPDATE qstate SET prio = CASE WHEN last_right=0 THEN 0 WHEN COALESCE(attempts,0)=0 THEN 1
+    WHEN last_right=1 THEN 3 ELSE 2 END WHERE user_id=?`, [uid]);
   const attemptsFrom = +(args.attemptsFrom || 0);
   await db.q(`INSERT INTO attempts (user_id,question_id,ts,correct,given,grade)
     SELECT ?, id, ?, FLOOR(RAND()*2), IF(type='mcq', ELT(FLOOR(RAND()*4)+1,'A','B','C','D'), '主观作答'), NULL
