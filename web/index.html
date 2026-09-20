@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuestionForge · 智能制题平台</title>
+<link rel="stylesheet" href="console.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="sidebar" style="display:none">
+    <div class="brand">
+      <div class="brand-title">QuestionForge</div>
+      <div class="brand-sub">智能制题平台</div>
+    </div>
+    <div class="user-chip" id="user-chip"></div>
+    <nav id="nav"></nav>
+    <div class="sidebar-foot" id="foot"></div>
+  </aside>
+  <main id="view" class="main"></main>
+</div>
+<div class="topbar" id="topbar" style="display:none">
+  <div class="user-menu" id="user-menu">
+    <button class="user-btn" id="user-btn" title="账号菜单">
+      <span class="avatar" id="avatar">?</span>
+      <span class="uname" id="topbar-name">用户</span>
+      <span class="caret">▾</span>
+    </button>
+    <div class="menu-drop" id="menu-drop">
+      <div class="menu-head" id="menu-head"></div>
+      <div class="menu-item" data-act="profile">👤 个人中心</div>
+      <div class="menu-item" data-act="switch">🔄 切换账号</div>
+      <div class="menu-sep"></div>
+      <div class="menu-item danger" data-act="logout">🚪 退出登录</div>
+    </div>
+  </div>
+</div>
+<div class="jobs-panel" id="jobs-panel" style="display:none">
+  <div class="jobs-head" id="jobs-head">
+    <span class="jobs-title">后台任务</span>
+    <span class="jobs-count" id="jobs-count"></span>
+    <span class="jobs-toggle" id="jobs-toggle">收起 ▾</span>
+  </div>
+  <div class="jobs-list" id="jobs-list"></div>
+</div>
+<div id="toast" class="toast"></div>
+<script src="console.js"></script>
+</body>
+</html>
