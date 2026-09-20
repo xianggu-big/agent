@@ -362,6 +362,11 @@ const SAMPLE = [
   await Store.saveQuestion(taskId, { id: qid, type: 'mcq', ch: 1, kp: 'x', diff: 2, stem: 'human-edit', options: ['a', 'b', 'c', 'd'], answer: 'A', status: 'rejected', human: { action: 'regen', ts: Date.now() }, verdicts: [], gen: {} }, { fromHuman: true });
   const changed = await db.q('SELECT status, human_json FROM questions WHERE id=?', [qid]);
   check('人工路径（fromHuman）能正常写入', changed[0][0].status === 'rejected');
+  /* 收尾：这道题是被本测试用裸 SQL 改成 rejected 的，必须还原成可练习状态，
+   * 否则会污染后面复用同一道题的断言（题目 id 由时间戳生成，谁排在前每次不同，
+   * 表现为"有时失败有时通过"——这种偶发就是测试自身没做清理造成的）。 */
+  await db.q("UPDATE questions SET status='accepted', human_json=NULL WHERE id=?", [qid]);
+  check("清理：被守卫测试改动的题目已还原", (await db.q("SELECT status FROM questions WHERE id=?", [qid]))[0][0].status === 'accepted');
 
   section('僵尸任务恢复（服务重启后不再永久卡死）');
   const orphan = { id: Store.id('t'), userId: meRow.id, name: '僵尸任务测试', material: { text: SAMPLE, rawChars: SAMPLE.length, warnings: [] }, requirements: [{ type: 'mcq', count: 1, kp: '', diff: 1, ch: 1 }], costs: { spent: 0, byProfile: {}, calls: 0 }, status: 'running', phase: 'verify', progress: {}, createdAt: Date.now() };

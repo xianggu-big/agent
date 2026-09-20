@@ -1186,7 +1186,7 @@ async function route(req, res) {
         correct = given === String(q.answer || '').toUpperCase();
       }
       await db.recordAttempt(user.id, q.id, correct, body.answer, grade);
-      const st = (await db.getMyState(user.id))[q.id] || {};
+      const st = await db.getQuestionState(user.id, q.id);
       return send(res, 200, { correct, answer: q.answer || null, expl: q.expl || null, ref: q.ref || null, mine: st });
     })(req, res);
 
@@ -1211,13 +1211,11 @@ async function route(req, res) {
     if (p === '/api/practice/stats' && req.method === 'GET') return requireUser(async (req, res, user) => {
       const stats = await db.practiceStats(user.id);
       const recent = await db.listAttempts(user.id, 60);
-      const _f = await db.practiceFilters(user.id);
-      const [[bank]] = await db.q(`SELECT COUNT(*) total FROM questions WHERE user_id=? AND status IN ('accepted','auto_accepted')`, [user.id]);
-      const [[hid]] = await db.q(`SELECT COUNT(*) n FROM questions q JOIN qstate s ON s.question_id=q.id AND s.user_id=q.user_id
-        WHERE q.user_id=? AND q.status IN ('accepted','auto_accepted') AND s.hidden=1`, [user.id]);
+      /* 三个计数全部只读 qstate（不变式：qstate 行 ⟺ 可练习题），不再 join questions */
+      const [[bank]] = await db.q(`SELECT COUNT(*) total FROM qstate WHERE user_id=?`, [user.id]);
+      const [[hid]] = await db.q(`SELECT COUNT(*) n FROM qstate WHERE user_id=? AND hidden=1`, [user.id]);
+      const [[todo]] = await db.q(`SELECT COUNT(*) n FROM qstate WHERE user_id=? AND hidden=0 AND COALESCE(attempts,0)=0`, [user.id]);
       const weak = await db.weakKPs(user.id, 8);
-      const [[todo]] = await db.q(`SELECT COUNT(*) n FROM questions q LEFT JOIN qstate s ON s.question_id=q.id AND s.user_id=q.user_id
-        WHERE q.user_id=? AND q.status IN ('accepted','auto_accepted') AND COALESCE(s.hidden,0)=0 AND COALESCE(s.attempts,0)=0`, [user.id]);
       return send(res, 200, {
         stats, recent, weak,
         bank: { total: Number(bank.total) || 0, hidden: Number(hid.n) || 0, todo: Number(todo.n) || 0 }
