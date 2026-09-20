@@ -1,0 +1,68 @@
+name: CI
+
+# 持续集成：装依赖 → 静态检查 → 单元/接口测试（全部跑在隔离的测试库上，不碰任何真实数据）
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: '123456'
+          MYSQL_DATABASE: questionforge_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -p123456"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # parse.py 需要这几个库（与 Dockerfile 保持一致）
+      - name: 安装系统与 Python 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim
+          pip install pymupdf pillow pytesseract
+
+      - name: 安装 Node 依赖
+        run: npm install
+
+      # 1) 纯静态检查：前端每个 api() 调用都能在后端找到路由；每个页面都从后端取数
+      - name: 接口连通性检查
+        run: node apicheck.js
+
+      - name: 视图取数审计
+        run: node viewaudit.js
+
+      # 2) 完整测试套件（自带独立测试库 questionforge_test 与模拟模型响应，不花一分钱 API 费用）
+      - name: 运行全部测试
+        env:
+          QF_DB_HOST: 127.0.0.1
+          QF_DB_PASSWORD: '123456'
+        run: node runtests.js
+
+      # 3) 测试报告（失败时也上传，便于排查）
+      - name: 上传日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            data/test-env/logs/**
+          if-no-files-found: ignore

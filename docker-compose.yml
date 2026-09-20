@@ -1,0 +1,58 @@
+# QuestionForge 一键起服务（应用 + MySQL）
+#
+#   docker compose up -d --build
+#   → 打开 http://localhost:8540 ，注册的第一个账号自动是管理员
+#
+# 说明：
+#  - 数据库首次启动会自动建库建表并执行迁移（lib/db.js 的 schema_migrations）；
+#  - data/ 挂载到宿主机，图片、科目包、日志、经验库在容器重建后依然保留；
+#  - 生产部署请把 QF_DB_PASSWORD 换成强口令，并在前面加一层 HTTPS 反向代理
+#    （Nginx/Caddy），同时设置 QF_SECURE_COOKIE=1。
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: qf-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${QF_DB_PASSWORD:-123456}
+      MYSQL_DATABASE: ${QF_DB_NAME:-questionforge}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - qf-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${QF_DB_PASSWORD:-123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      # 仅本机可连，避免把数据库直接暴露到公网
+      - "127.0.0.1:3306:3306"
+
+  app:
+    build: .
+    container_name: qf-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      QF_PORT: 8540
+      QF_DB_HOST: mysql
+      QF_DB_PORT: 3306
+      QF_DB_USER: root
+      QF_DB_PASSWORD: ${QF_DB_PASSWORD:-123456}
+      QF_DB_NAME: ${QF_DB_NAME:-questionforge}
+      QF_LOG_LEVEL: ${QF_LOG_LEVEL:-info}
+      QF_LOG_DIR: /app/data/logs
+      QF_SECURE_COOKIE: ${QF_SECURE_COOKIE:-0}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "${QF_PORT:-8540}:8540"
+
+volumes:
+  qf-mysql-data:
