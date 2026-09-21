@@ -173,7 +173,7 @@ check('普通用户看到的 Key 仍然是打码的', all('***' in p['apiKey'] o
 # ---------- 9. 用户管理与管理员创建 ----------
 print('\n[9] 用户管理与管理员创建')
 adm_op, _ = session()
-call(adm_op, '/api/auth/login', {'username': 'xianggu', 'password': '123456'})
+# （旧版会在这里登录某个真实管理员账号兜底，已改为统一使用测试夹具账号，见文件开头）
 if call(adm_op, '/api/me').get('role') != 'admin':
     skipcheck('用户管理测试', '测试库中无管理员账号')
 else:
@@ -224,7 +224,7 @@ else:
 # ---------- 10. 模型跟随供应商（模块化核心） ----------
 print('\n[10] 模型跟随供应商 / 预检接口')
 adm2, _ = session()
-call(adm2, '/api/auth/login', {'username': 'xianggu', 'password': '123456'})
+# （旧版会在这里登录某个真实管理员账号兜底，已改为统一使用测试夹具账号，见文件开头）
 if call(adm2, '/api/me').get('role') != 'admin':
     skipcheck('模型跟随供应商', '无管理员账号')
 else:
