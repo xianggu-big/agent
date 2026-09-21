@@ -38,7 +38,7 @@ print('=' * 60)
 # 管理员账号
 # 优先用测试夹具提供的固定管理员（runtests.js 会在测试库里预先建好）。
 # 旧版本这里是"注册第一个用户碰运气成为管理员"，失败时还会去登录真实管理员账号
-# （xianggu/123456）—— 那等于把测试绑在某个人的线上账号上；测试库隔离后必然失败。
+# （某个人的真实管理员账号）—— 那等于把测试绑在某个人的线上账号上；测试库隔离后必然失败。
 admin, acj = session()
 FIX_USER = os.environ.get('QF_TEST_ADMIN_USER')
 FIX_PWD = os.environ.get('QF_TEST_ADMIN_PWD')
