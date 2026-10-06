@@ -5,6 +5,22 @@
 import json, os, time, urllib.request, urllib.error, http.cookiejar
 
 BASE = os.environ.get('QF_BASE', 'http://localhost:8541')
+
+# ---------- 测试资料文件（仓库自带合成夹具，见 testdata/make_fixture.py） ----------
+# 旧写法直接 open('../19—25年852真题及答案.pdf')：本机才有、不在仓库里，CI 上必然失败。
+HERE = os.path.dirname(os.path.abspath(__file__))
+def _find_sample_pdf():
+    for c in (os.environ.get('QF_TEST_PDF'),
+              os.path.join(HERE, 'testdata', 'sample.pdf'),
+              os.path.join(HERE, '..', '19—25年852真题及答案.pdf')):
+        if c and os.path.isfile(c):
+            return os.path.abspath(c)
+    return None
+SAMPLE_PDF = _find_sample_pdf()
+if not SAMPLE_PDF:
+    print('✗ 找不到测试用 PDF。请先在项目根目录执行：python testdata/make_fixture.py')
+    print('  （或用环境变量 QF_TEST_PDF 指定一个真实资料文件）')
+    raise SystemExit(1)
 ok = fail = skip = 0
 TAG = str(int(time.time()))[-6:]
 
@@ -141,7 +157,7 @@ check('统计含题库概览', st['bank']['total'] > 0 and 'todo' in st['bank'],
 
 # ---------- 6. 题目原图 ----------
 print('\n[6] 题目原图接口')
-d = call(u, '/api/parse?name=pf.pdf', raw=open('../19—25年852真题及答案.pdf', 'rb').read())
+d = call(u, '/api/parse?name=pf.pdf', raw=open(SAMPLE_PDF, 'rb').read())
 r = call(u, '/api/tasks', {'name': '含图批次', 'requirements': [{'type': 'mcq', 'count': 4, 'kp': '图论', 'ch': 7}],
                            'materialText': d['text'], 'parseId': d['parseId'],
                            'imageIds': [im['id'] for im in d['images']], 'figureDescs': {}})

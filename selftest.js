@@ -221,7 +221,12 @@ function section(t) { results.push('\n【' + t + '】'); }
   /* 10. 金标集评估 */
   section('金标集评估');
   const golden = Evals.loadGolden();
-  check('找到金标题库（853 真题）', golden.length > 0, 'count=' + golden.length);
+  /* 金标题库来源不写死：本机可放真实真题（data/golden.js / 兄弟目录 853刷题系统，均在仓库外），
+   * CI 上回落到仓库内置的合成夹具 testdata/golden.js。两种来源都能让下面的评估流程被真实执行。
+   * （旧写法把"853 真题"写进断言名，CI 上拿不到真实题库就必然失败） */
+  const gsrc = Evals.goldenSource();
+  check('找到金标题库', golden.length > 0,
+    'count=' + golden.length + ' 来源=' + (gsrc && gsrc.file ? require('path').basename(gsrc.file) : '无'));
   if (golden.length) {
     const rep = await Evals.runVerifierEval(20);
     check('评估报告含各质检员准确率', Object.keys(rep.results.perVerifier).length >= 2);
