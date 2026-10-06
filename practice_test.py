@@ -7,12 +7,11 @@ import json, os, time, urllib.request, urllib.error, http.cookiejar
 BASE = os.environ.get('QF_BASE', 'http://localhost:8541')
 
 # ---------- 测试资料文件（仓库自带合成夹具，见 testdata/make_fixture.py） ----------
-# 旧写法直接 open('../19—25年852真题及答案.pdf')：本机才有、不在仓库里，CI 上必然失败。
+# 旧写法直接读取本机的一份真实 PDF：不在仓库里，CI 上必然失败。
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _find_sample_pdf():
     for c in (os.environ.get('QF_TEST_PDF'),
-              os.path.join(HERE, 'testdata', 'sample.pdf'),
-              os.path.join(HERE, '..', '19—25年852真题及答案.pdf')):
+              os.path.join(HERE, 'testdata', 'sample.pdf')):
         if c and os.path.isfile(c):
             return os.path.abspath(c)
     return None

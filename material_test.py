@@ -8,14 +8,12 @@ import os, sys
 BASE = os.environ.get('QF_BASE', 'http://localhost:8541')  # 测试独立端口，不影响正在使用的服务
 
 # ---------- 测试资料文件（仓库自带合成夹具，见 testdata/make_fixture.py） ----------
-# 旧写法直接 open('../19—25年852真题及答案.pdf')：那是本机才有的真实资料，不在仓库里，
-# 于是 GitHub Actions 上必然 FileNotFoundError（data/ 与兄弟目录都被排除在版本控制外）。
-# 现在按优先级查找，并允许用 QF_TEST_PDF 指定真实资料做更贴近实际的验证。
+# 旧写法直接读取本机的一份真实 PDF：那文件不在仓库里，于是 GitHub Actions 上必然 FileNotFoundError。
+# 现在按优先级查找：QF_TEST_PDF（想用真实资料做更贴近实际的验证时指定）→ 仓库自带的合成夹具。
 HERE = os.path.dirname(os.path.abspath(__file__))
 def _find_sample_pdf():
     for c in (os.environ.get('QF_TEST_PDF'),
-              os.path.join(HERE, 'testdata', 'sample.pdf'),
-              os.path.join(HERE, '..', '19—25年852真题及答案.pdf')):
+              os.path.join(HERE, 'testdata', 'sample.pdf')):
         if c and os.path.isfile(c):
             return os.path.abspath(c)
     return None

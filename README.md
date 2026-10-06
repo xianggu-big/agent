@@ -26,12 +26,12 @@
 
 ## 工程数据
 
-- **约 7000 行**代码：后端 12 个模块 + 前端原生 JS 控制台（白色主题、响应式、完整键盘与悬停交互）
-- **13 张表 / 11 条版本化迁移**：启动自动执行、可重复，并已在"生产库完整克隆"上验证
+- **约 9600 行 JS**（应用代码约 6400 行）：后端 19 个模块（含 1 个 Python 文档解析服务）+ 前端原生 JS 控制台（白色主题、响应式、完整键盘与悬停交互）
+- **15 张业务表 / 13 条版本化迁移**：启动自动执行、可重复，并已在"生产库完整克隆"上验证
 - **9 个测试套件**：350+ 断言 + **65 条路由冒烟**（逐条真实调用，断言不出现 5xx）
 - 结构化 JSON 日志、健康检查、优雅停机、接口分级限流、安全响应头、Docker Compose、GitHub Actions CI
 
-> 版本变更与设计取舍见 [docs/CHANGELOG-v3.md](docs/CHANGELOG-v3.md)；性能优化全过程见 [docs/PERF.md](docs/PERF.md)。
+> 架构分层与关键设计决策见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；性能优化全过程见 [docs/PERF.md](docs/PERF.md)。
 
 ---
 
@@ -317,7 +317,7 @@ DeepSeek-备,https://api.deepseek.com,sk-yyyyyyyy,2,8
 | 原图 | 含图题目直接渲染原图（服务端鉴权后输出，不暴露文件路径） |
 | 隐藏 | 不需要的题可隐藏（不再推送，但仍在数据库可恢复） |
 
-导出的科目包（`.js`）仍可用于交付给**外部**刷题客户端（[853刷题系统](../853刷题系统)），但平台内部使用已经不需要这一步。
+导出的科目包（`.js`）仍可用于交付给**外部**刷题客户端（外部刷题客户端），但平台内部使用已经不需要这一步。
 
 ---
 
@@ -397,10 +397,10 @@ simcal.js              近似重复判定指标的标定实验
 fixfigs.js             历史图片错挂修复（预演 / --yes，依据磁盘路径纠正归属）
 Dockerfile             docker compose / 单容器部署
 docker-compose.yml     一键起"应用 + MySQL"，data/ 挂载到宿主机
-.github/workflows/     CI：起 MySQL 服务并跑完全部 8 个套件
+.github/workflows/     CI：起 MySQL 服务并跑完全部 9 个套件
 .env.example           环境变量示例（数据库/安全/成本参数）
 data/                  运行时数据（config.json 含密钥、图片、科目包、日志，勿外传）
-docs/CHANGELOG-v3.md   v3 改造说明（改了什么、怎么改的、加了什么、删了什么）
+docs/ARCHITECTURE.md   分层与关键设计决策
 ```
 
 ## 部署
@@ -441,7 +441,6 @@ node fixfigs.js           # 预演：列出将被纠正的行
 node fixfigs.js --yes     # 执行（依据磁盘路径 …/uploads/<用户>/<资料>/<图片> 纠正归属）
 ```
 
-详细清单（含每一项改动的原因、影响面与验证记录）见 [`docs/CHANGELOG-v3.md`](docs/CHANGELOG-v3.md)。
 
 ## 已知边界
 

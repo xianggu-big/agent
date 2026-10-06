@@ -149,7 +149,7 @@ node loadtest.js --diff data/loadtest/loadtest-before-*.json data/loadtest/loadt
 
 ## 实测（5 万题、并发 30、客户端与 MySQL 同机）
 
-| 场景 | 本轮开始前 | 优化后 | 提升 |
+| 场景 | 优化前 | 优化后 | 提升 |
 |---|---|---|---|
 | **write**（答题） | 25 QPS / p95 4303ms | **527.7 QPS / p95 69.7ms** | **~21×** |
 | **read**（列表/筛选/统计） | 10.7 QPS / p95 6605ms | **52.2 QPS / p95 923ms** | **~4.9×** |
