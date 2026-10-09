@@ -26,6 +26,7 @@ function makeCall(script) {
   const log = [];
   const call = async (profile, messages, opts = {}) => {
     log.push({ messages: JSON.parse(JSON.stringify(messages)), opts: Object.assign({}, opts) });
+    if (script[log.length - 1] instanceof Error) throw script[log.length - 1];
     const step = script[log.length - 1];
     if (!step) throw new Error('脚本用完了（第 ' + log.length + ' 次调用没有对应步骤）');
     return typeof step === 'function' ? step(messages, opts) : step;
@@ -156,6 +157,45 @@ section('循环路径一：第一轮直接给出答案（不调工具）');
   check('rounds = 1', r.rounds === 1);
   check('内容原样返回', r.content === '{"answer":"B"}');
 
+  /* ---------- 路径五：供应商不支持 tools → 降级为无工具重跑（R1） ----------
+   * 这条对应实施方案 §5 承诺过的兜底，曾经"写了方案却没实现"。
+   * 现在的规矩是：承诺必须有一条会红的断言守着。 */
+  section('循环路径五：不支持 tools 的供应商 → 降级重跑（不让任务失败）');
+  const err400tools = () => { const e = new Error('API 400: {"error":{"message":"tools is not supported by this model"}}'); e.status = 400; return e; };
+
+  call = makeCall([
+    (m, o) => { if (o.tools && o.tools.length) { const e = new Error('API 400: tools is not supported by this model'); e.status = 400; throw e; } return { content: '{}', toolCalls: [] }; },
+    { content: '{"answer":"B"}', toolCalls: [] }
+  ]);
+  r = await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: Tools.list(), maxTokens: 800 });
+  check('★ 不抛异常（任务不会因此失败）', r.content === '{"answer":"B"}', r.content);
+  check('★ 结果标记为已降级', r.degraded === true, r.degraded);
+  check('★ 降级重跑那次没有带 tools', !call.log[1].opts.tools);
+  check('降级后不记录工具调用', r.tools.length === 0);
+  check('记录了降级原因', /tools is not supported/.test(String(r.degradedReason)), r.degradedReason);
+
+  /* 与 tools 无关的 400 必须照常抛出 —— 否则会静默降级、把真问题掩盖掉 */
+  call = makeCall([
+    (() => { const e = new Error('API 400: max_tokens too large for this model'); e.status = 400; return e; })(),
+    (() => { const e = new Error('API 400: max_tokens too large for this model'); e.status = 400; return e; })()
+  ]);
+  let threw = null;
+  try { await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: Tools.list(), maxTokens: 999999 }); }
+  catch (e) { threw = e; }
+  check('★ 与 tools 无关的 400 仍然抛出（不掩盖真问题）', !!threw && /max_tokens/.test(threw.message), threw && threw.message);
+  check('★ 且没有偷偷降级重跑', call.log.length === 1, call.log.length);
+
+  /* 5xx 不属可降级 */
+  call = makeCall([(() => { const e = new Error('API 500: internal error'); e.status = 500; return e; })()]);
+  threw = null;
+  try { await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: Tools.list() }); } catch (e) { threw = e; }
+  check('500 照常抛出（不属可降级错误）', !!threw && /500/.test(threw.message));
+
+  /* 本来就没带工具时，400 照常抛出 */
+  call = makeCall([(() => { const e = new Error('API 400: tools is not supported'); e.status = 400; return e; })()]);
+  threw = null;
+  try { await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: [] }); } catch (e) { threw = e; }
+  check('未带工具时 400 照常抛出（没有降级可降）', !!threw);
   /* ---------- 汇总 ---------- */
   console.log('\n通过 ' + ok + ' 项，失败 ' + fail + ' 项');
   process.exit(fail ? 1 : 0);
