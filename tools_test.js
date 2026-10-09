@@ -93,6 +93,20 @@ dangerous.forEach(d => {
 });
 check('没有发生副作用（进程仍存活）', true);
 
+/* ★ 更强的安全断言（R5 缺陷注入验证后补）：把最危险的几条放到**子进程**里跑。
+ * 为什么：如果求值器哪天被误改成用 eval，`process.exit(1)` 会真的执行、**把这个测试进程本身杀掉**；
+ * 那时 CI 虽然会红（退出码非 0），但报错信息只是"汇总行缺失"，看不出是哪条断言挂了。
+ * 放到子进程里跑，就能明确断言"子进程正常退出且返回了错误结果"。 */
+const { spawnSync } = require('child_process');
+const CHILD = [
+  "const T=require('./lib/tools')",
+  "const r=T.evaluate('process.exit(42)')",
+  "console.log(JSON.stringify(r))"
+].join(';');
+const cf = spawnSync(process.execPath, ['-e', CHILD], { encoding: 'utf8', cwd: __dirname, timeout: 15000 });
+check('★ 子进程没有被杀死（证明危险表达式确实没被执行）', cf.status === 0, 'status=' + cf.status + ' stderr=' + String(cf.stderr).slice(0, 120));
+check('★ 子进程返回的是错误结果而不是执行', /"ok":false/.test(String(cf.stdout)), String(cf.stdout).slice(0, 120));
+
 /* ---------- 5 工具契约（对外的 tools 定义与 call） ---------- */
 section('工具契约');
 const tools = T.list();

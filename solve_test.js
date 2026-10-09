@@ -196,6 +196,15 @@ section('循环路径一：第一轮直接给出答案（不调工具）');
   threw = null;
   try { await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: [] }); } catch (e) { threw = e; }
   check('未带工具时 400 照常抛出（没有降级可降）', !!threw);
+  /* ---------- 单轮工具调用数量上限（R5） ---------- */
+  section('单轮工具调用上限');
+  const many = () => ({ content: '', toolCalls: [1,2,3,4,5,6,7,8].map(n => tc('calc', { expression: n + '+1' }, 'c' + n)) });
+  call = makeCall([many, { content: '{"answer":"x"}', toolCalls: [] }]);
+  r = await S.solveWithTools(call, PROFILE, 'SYS', 'USER', { tools: Tools.list() });
+  check('单轮工具调用被限制在上限内', r.tools.length === 5, r.tools.length);
+  check('超出部分被记录（不静默丢弃）', r.toolOverrun === 3, r.toolOverrun);
+  check('★ 每个 tool_call 都配了结果消息（不破坏 API 配对）', call.log[1].messages.filter(x => x.role === 'tool').length === 8, call.log[1].messages.filter(x => x.role === 'tool').length);
+
   /* ---------- 汇总 ---------- */
   console.log('\n通过 ' + ok + ' 项，失败 ' + fail + ' 项');
   process.exit(fail ? 1 : 0);
