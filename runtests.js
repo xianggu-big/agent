@@ -72,6 +72,7 @@ async function runStep(label, cmd, args, env) {
   /* 工具层：纯函数，不需要起服务。重点是"不该被执行的东西一定只是报错"这条安全回归
    * —— 因为这个工具将来会通过对外 API / MCP 暴露给外部调用方。 */
   if (!await runStep('工具层自测（表达式求值 + 安全回归）', process.execPath, ['tools_test.js'])) { /* 继续 */ }
+  if (!await runStep('有界工具循环自测（请求/响应纯函数 + 四条路径）', process.execPath, ['solve_test.js'])) { /* 继续 */ }
 
   /* 2. 启动独立测试服务 */
   log('\n' + '━'.repeat(64));
