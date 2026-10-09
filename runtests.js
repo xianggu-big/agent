@@ -69,6 +69,9 @@ async function runStep(label, cmd, args, env) {
   /* 1. 静态检查（不需要服务） */
   if (!await runStep('接口连通性检查（前后端路由对齐）', process.execPath, ['apicheck.js'])) { /* 继续跑其余项 */ }
   if (!await runStep('视图取数审计（页面必须从数据库取数）', process.execPath, ['viewaudit.js'])) { /* 继续 */ }
+  /* 工具层：纯函数，不需要起服务。重点是"不该被执行的东西一定只是报错"这条安全回归
+   * —— 因为这个工具将来会通过对外 API / MCP 暴露给外部调用方。 */
+  if (!await runStep('工具层自测（表达式求值 + 安全回归）', process.execPath, ['tools_test.js'])) { /* 继续 */ }
 
   /* 2. 启动独立测试服务 */
   log('\n' + '━'.repeat(64));
