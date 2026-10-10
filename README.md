@@ -1,6 +1,6 @@
 # QuestionForge · 多用户智能制题平台
 
-[![CI](https://github.com/xianggu-big/questionforge/actions/workflows/ci.yml/badge.svg)](https://github.com/xianggu-big/questionforge/actions)
+[![CI](https://github.com/xianggu-big/agent_questionforge/actions/workflows/ci.yml/badge.svg)](https://github.com/xianggu-big/agent_questionforge/actions)
 ![Node](https://img.shields.io/badge/Node.js-%E5%86%85%E7%BD%AE%E6%A8%A1%E5%9D%97-3c873a)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-4479a1)
 ![deps](https://img.shields.io/badge/%E7%AC%AC%E4%B8%89%E6%96%B9%E4%BE%9D%E8%B5%96-1%E4%B8%AA-blue)

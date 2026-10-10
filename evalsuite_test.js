@@ -156,6 +156,15 @@ const throws = async fn => { try { await fn(); return null; } catch (e) { return
 
   const av = await ES.dockerAvailable({ refresh: true });
   console.log('  Docker 沙箱：' + (av.ok ? '可用（' + av.reason + '）' : '不可用 → ' + av.reason));
+  /* ★ 这条守的是 CI 上真发生过的一次崩溃：环境里**没有**要执行的命令时（CI 没有 docker），
+   * 往子进程 stdin 写数据会触发异步 EPIPE 事件，没人接就把整个进程打崩
+   * （GitHub Actions 上报 "EPIPE / syscall: write"，而本地因为有 docker 永远复现不了）。
+   * 所以断言"命令不存在时也必须有结果返回，且不许把进程弄崩"。 */
+  const bogus = await ES.runProc('definitely-not-a-real-binary-xyz', [], { input: 'hello\n', timeoutMs: 5000 });
+  check('★ 要执行的命令不存在时：返回错误对象而不是打崩进程（CI 上就栽在这条）',
+    !!bogus.error && String(bogus.error.code || '').length > 0, JSON.stringify(bogus.error && bogus.error.code));
+  const noDocker = await ES.dockerAvailable({ refresh: true, dockerBin: 'definitely-not-a-real-binary-xyz' });
+  check('★ 找不到 docker 命令时：降级信息明确（而不是崩溃）', noDocker.ok === false && /找不到 docker/.test(noDocker.reason), noDocker.reason);
   const repSB = await ES.runSuite({ suiteId: 'calgo', models: ['generator'], limit: 2, runner: 'docker' });
   check(av.ok ? '★ 沙箱可用 → 这一跑真的在沙箱里（runner=docker）'
               : '★ 沙箱不可用 → 降级本机跑，且报告里写明"已降级、无沙箱"',
