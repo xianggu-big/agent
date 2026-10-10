@@ -146,8 +146,11 @@ def parse_docx(path, outdir):
     """docx = zip 包；正文取 document.xml，内嵌图取 word/media/*"""
     with zipfile.ZipFile(path) as z:
         xml = z.read("word/document.xml").decode("utf-8", "ignore")
-        xml2 = re.sub(r"<w:p[ >]", "\n<w:p ", xml)
-        text = re.sub(r"\n{3,}", "\n\n", "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml2)))
+        # 段落分隔必须在「拼文本时」产生：只取 <w:t> 再 join，等于把段间换行全丢了。
+        # 实测：一份 3.3 万字的十套卷 docx 因此只剩 1 行 → 切块只剩 1 块 → 检索彻底失效。
+        paras = re.split(r"<w:p[ >]", xml)
+        text = "\n".join("".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", p)) for p in paras)
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()
         images = []
         for nm in z.namelist():
             if nm.startswith("word/media/"):
@@ -156,10 +159,35 @@ def parse_docx(path, outdir):
                 fp, w, h = _save_image(data, outdir, "docx_" + base)
                 images.append({"id": "docx_" + base, "page": None, "file": os.path.abspath(fp),
                                "w": w, "h": h, "kb": round(os.path.getsize(fp) / 1024.0, 1), "source": "embedded"})
+    warnings = []
+    qc = quality_check(text)
+    if qc and qc.get("warning"):
+        warnings.append(qc["warning"])
     return {"text": text, "pages": None, "images": images, "scanPages": [], "figurePages": [],
-            "stats": {"nativePages": None, "ocrPages": 0, "imageCount": len(images)}, "warnings": []}
+            "stats": {"nativePages": None, "ocrPages": 0, "imageCount": len(images),
+                      "oddRatio": qc["oddRatio"] if qc else None}, "warnings": warnings}
 
 
+# ---------- 提取质量体检 ----------
+# 为什么需要它：docx 若用了「符号字体」（Word 按字体把码位渲染成汉字），提取出来的是**码位**——
+# 实测：一→—、二→;、同→№、表→Q、2→s、每→D。Word 里看着正常，但题干是系统性错误的，
+# 界面上一眼看不出来。这里统计「白名单之外的字符占比」，超阈值就在 warnings 里给出明确提示。
+_COMMON = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff01-\uff5e0-9A-Za-z\s.,;:!?()\[\]{}'\"%+*/-=<>_|&$#@~^`]")
+
+
+def quality_check(text):
+    t = str(text or "")
+    if len(t) < 200:
+        return None
+    odd = len(t) - len(_COMMON.findall(t))
+    ratio = round(100.0 * odd / len(t), 2)
+    if ratio >= 2.0:
+        return {
+            "oddRatio": ratio,
+            "warning": ("提取质量可疑：有 " + str(ratio) + "% 的字符不在常用范围（可能是符号字体或公式对象——"
+                        "Word 里看着正常，但提取出来的文字是错的）。建议改用 PDF 重传，或人工核对后再使用。")
+        }
+    return {"oddRatio": ratio}
 def parse_txt(path):
     for enc in ("utf-8", "gbk", "utf-16"):
         try:
