@@ -1,10 +1,10 @@
 # QuestionForge · 多用户智能制题平台
 
-[![CI](https://github.com/USER/questionforge/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/questionforge/actions)
+[![CI](https://github.com/xianggu-big/questionforge/actions/workflows/ci.yml/badge.svg)](https://github.com/xianggu-big/questionforge/actions)
 ![Node](https://img.shields.io/badge/Node.js-%E5%86%85%E7%BD%AE%E6%A8%A1%E5%9D%97-3c873a)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-4479a1)
 ![deps](https://img.shields.io/badge/%E7%AC%AC%E4%B8%89%E6%96%B9%E4%BE%9D%E8%B5%96-1%E4%B8%AA-blue)
-![tests](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-9%20%E5%A5%97%E4%BB%B6%20%C2%B7%20350%2B%20%E6%96%AD%E8%A8%80-brightgreen)
+![tests](https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-12%20%E5%A5%97%E4%BB%B6%20%C2%B7%20700%2B%20%E6%96%AD%E8%A8%80-brightgreen)
 
 > **把客户的复习资料，变成一套"敢交付"的题库。**
 > AI 出题 → 多模型交叉质检 → 人工裁决 → 立刻可刷；成本可控、过程可审计、操作可撤回。
@@ -28,10 +28,10 @@
 
 - **约 9600 行 JS**（应用代码约 6400 行）：后端 19 个模块（含 1 个 Python 文档解析服务）+ 前端原生 JS 控制台（白色主题、响应式、完整键盘与悬停交互）
 - **15 张业务表 / 13 条版本化迁移**：启动自动执行、可重复，并已在"生产库完整克隆"上验证
-- **9 个测试套件**：350+ 断言 + **65 条路由冒烟**（逐条真实调用，断言不出现 5xx）
+- **12 个测试套件**：400+ 断言 + **65 条路由冒烟**（逐条真实调用，断言不出现 5xx）
 - 结构化 JSON 日志、健康检查、优雅停机、接口分级限流、安全响应头、Docker Compose、GitHub Actions CI
 
-> 架构分层与关键设计决策见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；性能优化全过程见 [docs/PERF.md](docs/PERF.md)；质检验算工具的设计与三组对照实验见 [docs/TOOLS.md](docs/TOOLS.md)。
+> 架构分层与关键设计决策见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；性能优化全过程见 [docs/PERF.md](docs/PERF.md)；质检验算工具的设计与三组对照实验见 [docs/TOOLS.md](docs/TOOLS.md)；模型评测框架（题集×判分方式×模型）见 [docs/EVALSUITE.md](docs/EVALSUITE.md)。
 
 ---
 
@@ -395,12 +395,14 @@ selftest.js            后端自测
 feature_test.js        新功能与本次修复的专项回归
 simcal.js              近似重复判定指标的标定实验
 fixfigs.js             历史图片错挂修复（预演 / --yes，依据磁盘路径纠正归属）
-Dockerfile             docker compose / 单容器部署
+Dockerfile             docker compose / 单容器部署
+Dockerfile.sandbox     代码沙箱镜像（评测里跑模型生成的代码用；断网/只读/限额，默认不用）
 docker-compose.yml     一键起"应用 + MySQL"，data/ 挂载到宿主机
-.github/workflows/     CI：起 MySQL 服务并跑完全部 9 个套件
+.github/workflows/     CI：起 MySQL 服务并跑完全部 12 个套件
 .env.example           环境变量示例（数据库/安全/成本参数）
 data/                  运行时数据（config.json 含密钥、图片、科目包、日志，勿外传）
-docs/ARCHITECTURE.md   分层与关键设计决策
+docs/ARCHITECTURE.md   分层与关键设计决策
+docs/EVALSUITE.md      模型评测框架（题集×判分×模型，可执行判分）
 ```
 
 ## 部署

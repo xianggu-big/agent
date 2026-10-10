@@ -205,6 +205,51 @@ section('循环路径一：第一轮直接给出答案（不调工具）');
   check('超出部分被记录（不静默丢弃）', r.toolOverrun === 3, r.toolOverrun);
   check('★ 每个 tool_call 都配了结果消息（不破坏 API 配对）', call.log[1].messages.filter(x => x.role === 'tool').length === 8, call.log[1].messages.filter(x => x.role === 'tool').length);
 
+  /* ---------- D1：run_code（沙箱执行）与异步工具执行器 ---------- */
+  section('run_code 工具与异步执行器（D1）');
+  check('默认 list() 不含 run_code（向后兼容：不传 opts 行为不变）',
+    Tools.list().length === 1 && Tools.list().every(x => x.function.name === 'calc'), Tools.list().map(x => x.function.name).join(','));
+  const withRun = Tools.list({ runCode: true });
+  check('list({runCode:true}) 才追加 run_code', withRun.length === 2 && withRun.some(x => x.function.name === 'run_code'));
+  check('run_code 的描述写明"断网沙箱 + C 程序 + 标准输入输出"（工具描述是模型判断该不该调的依据）',
+    /沙箱/.test(Tools.RUN_CODE_TOOL.function.description) && /C 程序/.test(Tools.RUN_CODE_TOOL.function.description)
+    && /标准输入/.test(Tools.RUN_CODE_TOOL.function.description));
+
+  const noCtx = await Tools.callAsync('run_code', JSON.stringify({ code: 'int main(void){return 0;}' }), {});
+  check('★ 没注入执行器时明确报错（不静默跳过：静默会让模型以为"跑了但没输出"）',
+    noCtx.ok === false && /不可用/.test(noCtx.error || ''), noCtx.error);
+
+  /* 走一遍完整的工具循环：异步执行器 → 结果喂回 → 模型给最终答案 */
+  const rcArg = { code: 'int main(void){printf("ok");return 0;}', stdin: '' };
+  const rcCall = makeCall([
+    { content: '', toolCalls: [tc('run_code', rcArg, 'r1')] },
+    { content: '{"answer":"B"}', toolCalls: [] }
+  ]);
+  let ran = null;
+  const rr = await S.solveWithTools(rcCall, PROFILE, 'SYS', 'USER', {
+    tools: Tools.list({ runCode: true }),
+    runTool: async (name, args) => { ran = { name, args }; return { ok: true, value: '程序实际输出：\n3 6 2 7 5 1 4' }; }
+  });
+  check('★ 异步执行器被等待并调用（工具轮真的执行了）',
+    !!ran && ran.name === 'run_code' && /printf/.test(String(ran.args)), JSON.stringify(ran && ran.args).slice(0, 60));
+  check('★ 执行结果被喂回模型（tool 消息里带着真实输出）',
+    /3 6 2 7 5 1 4/.test(JSON.stringify(rcCall.log[1].messages)), 'tool 消息缺执行结果');
+  check('异步工具轮结束后循环正常收口', rr.rounds === 2 && /"answer":"B"/.test(rr.content));
+
+  const boomCall = makeCall([
+    { content: '', toolCalls: [tc('run_code', rcArg, 'r2')] },
+    { content: '{"answer":"C"}', toolCalls: [] }
+  ]);
+  const rb = await S.solveWithTools(boomCall, PROFILE, 'SYS', 'USER', {
+    tools: Tools.list({ runCode: true }),
+    runTool: async () => { throw new Error('docker 挂了'); }
+  });
+  check('★ 执行器抛错被兜住（转成"工具失败"喂回，不打挂整道题）',
+    rb.tools.length === 1 && rb.tools[0].ok === false && /docker 挂了/.test(String(rb.tools[0].result)),
+    JSON.stringify(rb.tools).slice(0, 120));
+  check('calc 仍走同步实现（callAsync 向后兼容）',
+    (await Tools.callAsync('calc', JSON.stringify({ expression: '(2+3)*4' }), {})).value === 20);
+
   /* ---------- 汇总 ---------- */
   console.log('\n通过 ' + ok + ' 项，失败 ' + fail + ' 项');
   process.exit(fail ? 1 : 0);

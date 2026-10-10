@@ -15,6 +15,7 @@ const { spawn } = require('child_process');
 const Store = require('./lib/store');
 const Agent = require('./lib/agent');
 const Evals = require('./lib/evals');
+const ES = require('./lib/evalsuite');
 const Cost = require('./lib/cost');
 const Vision = require('./lib/vision');
 const db = require('./lib/db');
@@ -154,6 +155,45 @@ function rateLimit(req, res, kind, key) {
 }
 function reqMeta(req) {
   return { ip: RL.clientIp(req), ua: String(req.headers['user-agent'] || '').slice(0, 200) };
+}
+
+/* ---------- 题集评测：请求参数 → 一次可执行的评测计划 ----------
+ * 抽出来是因为 estimate 与 run 两条接口必须**用完全同一套参数解释**：
+ * 各算各的就会出现"预估按 3 个模型算、真跑只跑 1 个"这种账对不上的事。
+ * 返回 { error } 而不是抛异常：调用方要回 400 给页面看（而不是 500 让它以为服务坏了）。 */
+const SUITE_MAX_MODELS = 4;      // 一次最多比 4 个岗位（再多就是烧钱，且报告也没人看）
+const SUITE_MAX_REPEATS = 3;     // 重复上限 3：再高的精度用"加题"换，比重复问同一题划算
+function buildSuiteRun(body, cfg) {
+  const suiteId = String((body && body.suiteId) || 'calgo');
+  let suite;
+  try { suite = ES.loadSuite(suiteId); } catch (e) { return { error: e.message }; }
+  const models = (Array.isArray(body.models) ? body.models : [])
+    .map(x => String(x)).filter(Boolean).slice(0, SUITE_MAX_MODELS);
+  if (!models.length) return { error: '至少要选一个模型岗位（该岗位绑的模型就是参赛选手）' };
+  for (const m of models) {
+    if (!cfg.profiles || !cfg.profiles[m]) return { error: '未知岗位：' + m + '（请到「API 池」确认岗位名）' };
+  }
+  const repeats = Math.max(1, Math.min(+(body.repeats || 1), SUITE_MAX_REPEATS));
+  let items = suite.items;
+  if (Array.isArray(body.items) && body.items.length) {
+    const want = new Set(body.items.map(String));
+    items = items.filter(it => want.has(it.id));
+    if (!items.length) return { error: '指定的题目在该题集里都不存在：' + body.items.join(',') };
+  } else if (+body.limit > 0) {
+    items = items.slice(0, +body.limit);
+  }
+  return { suite, models, repeats, items, itemIds: items.length === suite.items.length ? null : items.map(it => it.id) };
+}
+
+/* 回给页面的报告：去掉逐题明细（可能很大），但保留页面要展示的一切 */
+function publicSuiteReport(rep) {
+  return {
+    id: rep.id, ts: rep.ts, suite: rep.suite, judge: rep.judge, judgeLabel: rep.judgeLabel,
+    mode: rep.mode, runner: rep.runner, repeats: rep.repeats, samples: rep.samples,
+    sandboxDegraded: rep.sandboxDegraded || null,
+    sampleWarning: rep.sampleWarning, systemPrompt: rep.systemPrompt,
+    models: rep.models, recommend: rep.recommend, itemsRun: rep.itemsRun
+  };
 }
 
 /* ---------- 自然语言 → 结构化需求 ----------
@@ -1716,6 +1756,124 @@ async function route(req, res) {
       const rep = await Evals.runVerifierEval(body.limit, body.roles);
       await db.logOp(user.id, 'eval', '运行金标集评估（' + rep.goldenCount + ' 题，结论 ' + rep.verdict + '）', { scope: 'admin' });
       return send(res, 200, Object.assign({ md: Evals.evalToMd(rep) }, rep));
+    })(req, res);
+
+    /* ---------- 题集评测（② 模型评测框架）：题集 × 判分方式 × 模型 ----------
+     * 三条接口的分工：
+     *   GET  /api/eval/suites         列题集 + 可选模型 + 最近跑过的报告（页面渲染用）
+     *   POST /api/eval/suite/estimate 只算钱不跑（真花钱之前先让用户看见数字）
+     *   POST /api/eval/suite/run      跑一批；**真实调用必须 confirm:true**（防误触花钱的闸门）
+     * 模拟跑（real 不为 true）不发任何真实请求、不花钱，页面用它试链路。 */
+    if (p === '/api/eval/suites' && req.method === 'GET') return requireAdmin(async (req, res) => {
+      const cfg = Store.loadConfig();
+      const models = Object.keys(cfg.profiles || {}).map(k => {
+        const pr = Store.profileFor(cfg, k);
+        return {
+          role: k, label: pr.label || k, model: pr.model || '(未配置)',
+          provider: pr.providerName || '', usable: !pr.missing && !!pr.apiKey,
+          isVerifier: k.startsWith('verifier')
+        };
+      });
+      const gcc = ES.findGcc();
+      return send(res, 200, {
+        suites: ES.listSuites().map(s => ({
+          id: s.id, title: s.title, judge: s.judge, items: s.items, groups: s.groups,
+          judgeLabel: ES.JUDGE_CN[s.judge] || s.judge, error: s.error || null
+        })),
+        models,
+        recent: ES.listSuiteReports(10),
+        runner: { gcc: !!gcc, path: gcc || null }
+      });
+    })(req, res);
+
+    if (p === '/api/eval/suite/estimate' && req.method === 'POST') return requireAdmin(async (req, res) => {
+      const body = JSON.parse((await readBody(req, 0.1)).toString('utf8') || '{}');
+      const cfg = Store.loadConfig();
+      const built = buildSuiteRun(body, cfg);
+      if (built.error) return send(res, 400, { error: built.error });
+      const est = ES.estimateCost(built.suite, built.items, built.models, built.repeats, cfg);
+      return send(res, 200, {
+        estimate: {
+          calls: est.calls, total: +est.total.toFixed(4),
+          rows: est.rows.map(r => ({ role: r.role, label: r.label, model: r.model, provider: r.provider,
+            tokenIn: r.tokenIn, tokenOut: r.tokenOut, total: +r.total.toFixed(4) }))
+        },
+        plan: { suiteId: built.suite.id, title: built.suite.title, judge: built.suite.judge,
+          items: built.items.length, models: built.models, repeats: built.repeats }
+      });
+    })(req, res);
+
+    if (p === '/api/eval/suite/run' && req.method === 'POST') return requireAdmin(async (req, res, user) => {
+      if (rateLimit(req, res, 'llm', String(user.id))) return;
+      const body = JSON.parse((await readBody(req, 0.1)).toString('utf8') || '{}');
+      const cfg = Store.loadConfig();
+      const built = buildSuiteRun(body, cfg);
+      if (built.error) return send(res, 400, { error: built.error });
+      const real = body.real === true;
+      if (real && body.confirm !== true) {
+        return send(res, 400, { error: '真实调用需要先看预估费用并确认（confirm: true）—— 这是防误触花钱的闸门' });
+      }
+      let rep;
+      try {
+        rep = await ES.runSuite({
+          suite: built.suite, models: built.models, repeats: built.repeats, items: built.itemIds,
+          real, save: real,                // 真实跑的结果一律落盘（花了钱的数据不能只留在页面上）
+          sandbox: body.sandbox === true   // 要沙箱就要；要不到会降级并在报告里写明（不假装）
+        });
+      } catch (e) {
+        /* 跑到一半失败（岗位没凭据、判分方式不符等）都是"用户可修正的问题"，回 400 而不是 500 */
+        return send(res, 400, { error: e.message });
+      }
+      const top = (rep.recommend && rep.recommend.rows[0]) || null;
+      await db.logOp(user.id, 'eval', '题集评测：' + built.suite.id + ' × ' + built.models.join(',')
+        + '（' + (real ? '真实' : '模拟') + '，最佳 ' + (top ? top.model + ' ' + top.accuracy + '%' : '-') + '）', { scope: 'admin' });
+      return send(res, 200, { id: rep.id, md: rep.md, mode: rep.mode, saved: real, report: publicSuiteReport(rep) });
+    })(req, res);
+
+    /* ---------- 阶段四：把评测结论写回岗位绑定 ----------
+     * 写 config.json 是敏感操作，所以四道校验 + 二次确认，且**只允许绑评测真的跑过的组合**：
+     *   ① 岗位必须是配置里已有的（不许凭空造岗位）
+     *   ② 供应商必须存在、启用、且有 Key（绑到一个没 Key 的供应商 = 把流水线弄挂）
+     *   ③ 模型名非空且长度受限（它会进请求体）
+     *   ④ 带 reportId 时必须与那份报告对账（防止前端传任意组合）
+     * 例外：页面上的「恢复原绑定」不带 reportId（原组合当然不在报告里）—— 那条路径仍受 ①②③ 约束，
+     * 且管理员本来就能在「API 池」改配置，不存在越权。 */
+    if (p === '/api/eval/suite/apply' && req.method === 'POST') return requireAdmin(async (req, res, user) => {
+      const body = JSON.parse((await readBody(req, 0.1)).toString('utf8') || '{}');
+      if (body.confirm !== true) return send(res, 400, { error: '绑定变更需要确认（confirm: true）' });
+      const role = String(body.role || '');
+      const providerId = String(body.providerId || '');
+      const clearOverride = body.clearOverride === true;
+      const model = String(body.model || '').trim();
+      const cfg = Store.loadConfig();
+      if (!cfg.profiles || !cfg.profiles[role]) return send(res, 400, { error: '未知岗位：' + role });
+      const prov = (cfg.providers || []).find(x => x.id === providerId);
+      if (!prov) return send(res, 400, { error: '未知供应商：' + providerId });
+      if (prov.enabled === false) return send(res, 400, { error: '该供应商已被禁用，不能绑过去' });
+      if (!prov.apiKey) return send(res, 400, { error: '该供应商没有 API Key，绑过去会让该岗位直接不可用' });
+      if (!clearOverride && (!model || model.length > 80)) return send(res, 400, { error: '模型名不合法（空或过长）' });
+      if (body.reportId) {
+        const file = path.join(ES.suitesDir(), String(body.reportId).replace(/[^\w.-]/g, '') + '.json');
+        if (!fs.existsSync(file)) return send(res, 400, { error: '找不到那份评测报告：' + body.reportId });
+        const rep = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const hit = (rep.models || []).some(m => m.role === role && m.providerId === providerId && m.model === model);
+        if (!hit) return send(res, 400, { error: '那份报告里没有"岗位 ' + role + ' 用 ' + providerId + ' / ' + model + '"这一项 —— 只允许按评测跑过的组合绑定' });
+      }
+      const before = {
+        providerIds: (cfg.profiles[role].providerIds || []).slice(),
+        modelOverride: cfg.profiles[role].modelOverride || ''
+      };
+      cfg.profiles[role].providerIds = [providerId];
+      cfg.profiles[role].modelOverride = clearOverride ? '' : model;
+      Store.saveConfig(cfg);
+      const after = Store.profileFor(cfg, role);
+      await db.logOp(user.id, 'eval', '按评测结果绑定：' + role + ' → ' + (prov.name || providerId) + ' / ' + after.model
+        + '（原：' + (before.providerIds.join(',') || '无') + ' / ' + (before.modelOverride || '默认模型') + '）', { scope: 'admin' });
+      return send(res, 200, {
+        ok: true, role, before,
+        after: { providerIds: cfg.profiles[role].providerIds.slice(), modelOverride: cfg.profiles[role].modelOverride,
+          provider: after.providerName, model: after.model }
+      });
     })(req, res);
 
     return send(res, 404, { error: '未知接口' });

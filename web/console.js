@@ -1692,10 +1692,146 @@ window.decideRevert = function (btn, id, approve) {
 };
 
 /* ================= 金标评估 / 经验库 ================= */
+
+/* 题集评测卡片（② 模型评测框架）：题集 × 判分方式 × 模型。
+ * 为什么和下面那张"质检员评估"分开：那张问的是"我的质检员在真题上准不准"（金标题库、选择题）；
+ * 这张问的是"这套题上哪个模型更好"（题集自带判分方式，可以是跑代码）—— 两件事，别混在一张表里。 */
+function suiteCard(sq) {
+  const suites = (sq.suites || []).filter(s => !s.error);
+  const usable = (sq.models || []).filter(m => m.usable);
+  const def = new Set(usable.filter(m => m.isVerifier).slice(0, 2).map(m => m.role));
+  if (!def.size && usable.length) def.add(usable[0].role);
+  const recent = sq.recent || [];
+  return `<div class="card"><h3>题集评测：题集 × 判分方式 × 模型（选型依据）</h3>
+    <div class="page-sub">用同一套题同时考几个岗位绑定的模型。<b>判分是跑代码 / 逐字段比对，不是让模型互相打分</b>，所以准确率可以直接当依据用。</div>
+    ${!suites.length ? '<div class="warn-box">没有可用题集（检查 testdata/suites/ 目录）</div>' : ''}
+    <div class="filter-row" style="flex-wrap:wrap;gap:12px">
+      <label>题集
+        <select id="sq-suite">${suites.map(s => `<option value="${esc(s.id)}">${esc(s.title)}（${s.items} 题 · 判分 ${esc(s.judge)}）</option>`).join('')}</select>
+      </label>
+      <label>每题重复
+        <select id="sq-repeats"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次（测方差，费用×3）</option></select>
+      </label>
+      <label>题量上限 <input type="number" id="sq-limit" min="1" placeholder="全部" style="width:84px"></label>
+      <label title="让模型生成的代码在 Docker 里编译运行（断网/只读/限额）。没装或没启动 Docker 时会自动降级到本机并在报告里写明">
+        <input type="checkbox" id="sq-sandbox"> 沙箱执行代码
+      </label>
+    </div>
+
+    <div class="hint" style="margin-top:6px">沙箱执行需要本机已装 Docker 且建好 <code>qf-sandbox</code> 镜像（见 docs/EVALSUITE.md §13）；
+      <b>要不到会降级到本机运行，并在报告头部写明"已降级、无沙箱"</b> —— 不会假装。</div>
+    <table class="tbl" style="margin-top:8px"><tr><th style="width:190px">参赛（勾岗位＝勾它当前绑的模型）</th><th>当前会用的模型</th><th style="width:80px">勾选</th></tr>
+      ${(sq.models || []).map(m => `<tr>
+        <td><b>${esc(m.label)}</b><div class="hint">${esc(m.role)}</div></td>
+        <td>${m.usable ? esc(m.provider) + ' / ' + esc(m.model) : '<span class="badge b-red">不可用</span><div class="hint">没配 Key，到「API 池」补</div>'}</td>
+        <td><input type="checkbox" class="sq-model" value="${esc(m.role)}" ${m.usable && def.has(m.role) ? 'checked' : ''} ${m.usable ? '' : 'disabled'}></td>
+      </tr>`).join('')}
+    </table>
+    ${(sq.models || []).filter(m => m.usable).length < 2 ? '<div class="hint" style="margin-top:6px">⚠ 只勾得出一个可用岗位：这样比出来的是"同一家模型"，要真正做选型，去 <span class="link" onclick="nav(\'pool\')">API 池</span> 把另一个岗位绑到别家供应商。</div>' : ''}
+    <div class="btn-row">
+      <button class="btn ghost" onclick="suiteRun(this,false)">▶ 模拟跑（不花钱，试链路）</button>
+      <button class="btn" onclick="suiteRun(this,true)">💰 真实跑（先看预估，再确认）</button>
+      <span class="hint">${sq.runner && sq.runner.gcc ? '代码运行器：本机 gcc（真编译真运行）' : '⚠ 没找到 gcc：跑代码那类题集会直接编译失败'}</span>
+    </div>
+    <div id="suite-out"></div>
+    ${recent.length ? `<div style="margin-top:12px"><b>最近跑过的题集评测</b>
+      <table class="tbl"><tr><th>时间</th><th>题集</th><th>模式</th><th>结果</th></tr>
+      ${recent.map(r => `<tr>
+        <td class="nowrap">${fmtTime(r.ts)}</td>
+        <td>${esc(r.title || r.suiteId)}<div class="hint">${esc(r.judge || '')} · ${r.samples} 题${r.repeats > 1 ? ' × ' + r.repeats + ' 次' : ''}</div></td>
+        <td>${r.mode === 'real' ? '<span class="badge b-green">真实</span>' : '<span class="badge b-gray">模拟</span>'}</td>
+        <td><div class="hint">${(r.models || []).map(m => esc(m.label) + ' = ' + esc(m.model) + ' ' + m.accuracy + '%' + (m.flipRate != null ? '（翻转 ' + m.flipRate + '%）' : '')).join('<br>')}</div></td>
+      </tr>`).join('')}</table>
+      <div class="hint" style="margin-top:6px">真实跑的报告存于 data/evals/suites/（含逐题明细）。</div>
+    </div>` : ''}
+  </div>`;
+}
+
+/* 收集题集评测表单：模拟 / 预估 / 真跑三条路径共用同一份参数解释，
+ * 免得出现"预估按 3 个模型算、真跑只跑了 1 个"这种账对不上的事。 */
+function suitePick() {
+  const suiteId = (($('#sq-suite') || {}).value) || '';
+  const models = [...document.querySelectorAll('.sq-model:checked')].map(x => x.value);
+  if (!models.length) { toast('请至少勾选一个模型岗位'); return null; }
+  const p = { suiteId, models, repeats: +((($('#sq-repeats') || {}).value) || 1) };
+  const lim = +((($('#sq-limit') || {}).value) || 0);
+  if (lim > 0) p.limit = lim;
+  /* 沙箱开关：勾了就要求容器执行（要不到由服务端降级并在报告里写明） */
+  if (($('#sq-sandbox') || {}).checked) p.sandbox = true;
+  return p;
+}
+/* 题集评测跑完后的「绑定建议」面板（阶段四）。
+ *
+ * 设计上的一个关键取舍：**不是"把最准的模型一键套到所有岗位"**。
+ * 把两个质检员都换到同一家模型，"交叉质检"就失去异构价值了——评测只回答"谁更准"，
+ * "要不要保留异构"是业务决策。所以这里把数据和代价都摆出来，由人点。 */
+let lastSuiteReport = null;
+let lastSuiteApply = null;      // {role, before} —— 供"恢复原绑定"用
+function suiteBindingPanel(rep) {
+  const rows = (rep.recommend && rep.recommend.rows) || [];
+  if (rows.length < 2) return '<div class="hint" style="margin-top:8px">只跑了一个模型：没有可比的第二个，也就没有"换绑"的建议。</div>';
+  const best = rows[0];
+  const lines = (rep.models || []).map((m, i) => {
+    const same = m.providerId === best.providerId && m.model === best.model;
+    const dAcc = (best.accuracy - m.accuracy).toFixed(1);
+    const ratio = m.costPerItem > 0 ? (best.costPerItem / m.costPerItem) : null;
+    if (same) return `<tr><td>${esc(m.label)}<div class="hint">${esc(m.role)}</div></td>
+      <td>${esc(m.provider)} / ${esc(m.model)}</td>
+      <td><span class="badge b-green">已是最优</span></td><td class="hint">—</td></tr>`;
+    return `<tr><td>${esc(m.label)}<div class="hint">${esc(m.role)}</div></td>
+      <td>${esc(m.provider)} / ${esc(m.model)}</td>
+      <td><span class="badge b-blue">建议换成 ${esc(best.model)}</span>
+        <div class="hint">准确率 ${dAcc > 0 ? '+' + dAcc : dAcc} 个百分点；单题成本${ratio ? ' × ' + ratio.toFixed(2) : '—'}</div></td>
+      <td><button class="btn sm" onclick="suiteApply(this,${i})">应用</button></td></tr>`;
+  }).join('');
+  const sameProvider = new Set((rep.models || []).map(m => m.providerId)).size === 1;
+  return `<div class="note-box" style="margin-top:10px">
+    <b>绑定建议</b>（来自上面这份报告：<span class="hint">${esc(rep.id)}</span>）
+    <table class="tbl" style="margin-top:6px"><tr><th style="width:170px">岗位</th><th>当前绑定</th><th>建议</th><th style="width:80px"></th></tr>${lines}</table>
+    <div class="hint" style="margin-top:6px">⚠ 把多个质检员都换到同一家，就失去了<b>异构交叉质检</b>的价值 —— 评测只说明"谁更准"，"要不要保留异构"是你来决定。
+      应用会写进 config.json（改完即时生效，可在「API 池」看到）；误点了可以点下面的「恢复原绑定」。</div>
+    ${sameProvider ? '<div class="hint">（本次参赛的模型都来自同一家供应商：换不换都不改变异构性）</div>' : ''}
+    <div id="suite-apply-out" style="margin-top:6px"></div>
+  </div>`;
+}
+window.suiteApply = async function (btn, idx) {
+  if (!lastSuiteReport) { toast('先跑一次评测'); return; }
+  const m = (lastSuiteReport.models || [])[idx];
+  const best = lastSuiteReport.recommend.rows[0];
+  if (!m || !best) return;
+  if (!confirm('把 ' + (m.label || m.role) + ' 的绑定改为：' + best.provider + ' / ' + best.model + '？\n\n会写进 config.json，立即生效。')) return;
+  return busy(btn, async () => {
+    try {
+      const r = await api('/api/eval/suite/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportId: lastSuiteReport.id, role: m.role, providerId: best.providerId, model: best.model, confirm: true }) });
+      lastSuiteApply = { role: r.role, before: r.before };
+      $('#suite-apply-out').innerHTML = `<div class="note-box">✅ 已把 <b>${esc(m.label || m.role)}</b> 改为 ${esc(r.after.provider)} / ${esc(r.after.model)}`
+        + `　<span class="link" onclick="suiteRestore(this)">恢复原绑定</span></div>`;
+      toast('已应用：' + (m.label || m.role));
+    } catch (e) { $('#suite-apply-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
+  });
+};
+window.suiteRestore = async function (btn) {
+  if (!lastSuiteApply) return;
+  const b = lastSuiteApply.before;
+  return busy(btn, async () => {
+    try {
+      await api('/api/eval/suite/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: lastSuiteApply.role, providerId: b.providerIds[0], model: b.modelOverride,
+          clearOverride: !b.modelOverride, confirm: true }) });
+      lastSuiteApply = null;
+      $('#suite-apply-out').innerHTML = '<div class="note-box">已恢复原绑定。</div>';
+      toast('已恢复');
+    } catch (e) { $('#suite-apply-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
+  });
+};
 async function vEval() {
   const list = (State.global && State.global.evals) || [];
   let pf = null;
   try { pf = await api('/api/eval/preflight'); } catch (e) { /* 忽略 */ }
+  /* 题集评测（② 模型评测框架）的元数据：题集清单 + 可选岗位 + 最近跑过的报告 */
+  let sq = null;
+  try { sq = await api('/api/eval/suites'); } catch (e) { /* 忽略（非管理员或接口异常） */ }
   const vrows = (pf && pf.verifiers) || [];
   const roleRows = vrows.map(v => `
     <tr>
@@ -1712,6 +1848,7 @@ async function vEval() {
   $('#view').innerHTML = `
     <h1 class="page">金标集评估</h1>
     <div class="page-sub">用已人工验算的真题当考卷，量化质检模型可信度（共识准确率 ≥85% 且未答率 ≤20% 才可自动入库）</div>
+    ${sq ? suiteCard(sq) : ''}
     <div class="card"><h3>本次评估将使用（跟随「API 池」的配置，改完即时生效）</h3>
       <table class="tbl"><tr><th style="width:140px">互检岗位</th><th style="width:170px">质检视角</th><th style="width:230px">状态与实际模型</th><th>候选供应商</th></tr>
         ${roleRows || '<tr><td colspan="4" class="hint">没有配置任何质检岗位</td></tr>'}
@@ -1751,7 +1888,56 @@ window.runEval = async function (btn) {
       const r = await api('/api/eval/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ roles }) });
       $('#eval-out').innerHTML = `<pre class="quote-pre">${esc(r.md)}</pre>`;
       toast('评估完成：' + r.verdict);
-    } catch (e) { $('#eval-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
+      } catch (e) { $('#eval-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
+  });
+};
+/* 题集评测：模拟跑 / 真实跑（两步：先预估 → 看见钱 → 确认后才发真实请求） */
+window.suiteRun = async function (btn, real) {
+  const p = suitePick();
+  if (!p) return;
+  if (!real) {
+    return busy(btn, async () => {
+      $('#suite-out').innerHTML = '<div class="hint"><span class="spin"></span>模拟跑（不发真实请求、不花钱）…</div>';
+      try {
+        const r = await api('/api/eval/suite/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+        lastSuiteReport = null;   // 模拟数据的报告**不允许**用来改绑定（按假数字绑模型比不绑更糟）
+        $('#suite-out').innerHTML = '<div class="note-box">⚠ <b>这是模拟数据</b>：只验证链路（指标计算/失败分类/报告渲染），不代表模型的真实能力。要真数据请点「真实跑」。</div>'
+          + `<pre class="quote-pre">${esc(r.md)}</pre>`;
+      } catch (e) { $('#suite-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
+    });
+  }
+  return busy(btn, async () => {
+    $('#suite-out').innerHTML = '<div class="hint"><span class="spin"></span>正在估算费用…</div>';
+    let d;
+    try {
+      d = await api('/api/eval/suite/estimate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+    } catch (e) { $('#suite-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; return; }
+    const rows = d.estimate.rows.map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.provider)} / ${esc(r.model)}</td><td>约 ${r.tokenIn} → ${r.tokenOut} token</td><td>¥${r.total.toFixed(4)}</td></tr>`).join('');
+    $('#suite-out').innerHTML = `
+      <div class="note-box"><b>这次真实跑会花多少钱（预估）</b>
+        <table class="tbl" style="margin-top:6px"><tr><th>岗位</th><th>模型</th><th>每题 token</th><th>小计</th></tr>${rows}
+          <tr><td colspan="3"><b>合计（${d.estimate.calls} 次调用）</b></td><td><b>约 ¥${d.estimate.total.toFixed(4)}</b></td></tr></table>
+        <div class="hint" style="margin-top:6px">${esc(d.plan.title)} · ${d.plan.items} 题 · 判分 ${esc(d.plan.judge)} · 每题重复 ${d.plan.repeats} 次 · 参赛 ${d.plan.models.length} 个模型</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn" onclick="suiteGo(this)">✔ 确认并开始（约 ¥${d.estimate.total.toFixed(4)}）</button>
+        <span class="hint">只有点了确认才会发出真实请求；跑完自动存到 data/evals/suites/</span>
+      </div>`;
+  });
+};
+window.suiteGo = async function (btn) {
+  const p = suitePick();
+  if (!p) return;
+  p.real = true; p.confirm = true;
+  return busy(btn, async () => {
+    $('#suite-out').innerHTML = '<div class="hint"><span class="spin"></span>真实跑进行中（逐题调用所选模型，题多时较慢，别关页面）…</div>';
+    try {
+      const r = await api('/api/eval/suite/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      const spent = (r.report.models || []).reduce((s, m) => s + (m.cost || 0), 0);
+      lastSuiteReport = r.report;      // 只有真实跑的报告才允许用来改绑定
+      $('#suite-out').innerHTML = `<div class="note-box">✅ 真实跑完成，共花 ¥${spent.toFixed(4)}${r.saved ? '，报告已存入 data/evals/suites/' : ''}</div>`
+        + `<pre class="quote-pre">${esc(r.md)}</pre>` + suiteBindingPanel(r.report);
+    } catch (e) { $('#suite-out').innerHTML = `<div class="warn-box">${esc(e.message)}</div>`; }
   });
 };
 async function vMemory() {

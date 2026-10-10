@@ -3,7 +3,8 @@
  * 覆盖：
  *   一、纯逻辑单测（不碰数据库）：资料分块 / 按考点检索取材 / 近似重复检测 / 知识点规则抽取 / 限流
  *   二、接口级测试（对着 QF_BASE）：健康检查、签到幂等、在线时长、知识点抽取、按知识点分别出题、
- *      题库 SQL 侧筛选与分页、收藏/隐藏、操作记录按 scope 隔离、按用户号查审计、撤回申请与执行、CSRF
+ *      题库 SQL 侧筛选与分页、收藏/隐藏、操作记录按 scope 隔离、按用户号查审计、撤回申请与执行、CSRF、
+ *      题集评测接口（列题集/预估/模拟跑；真实跑缺 confirm 必须被挡下）
  *   三、本次修复的针对性回归：
  *      · 计费幂等（同一笔只扣一次）
  *      · "待人工审核"的任务也会结算费用（旧版本这一支永远不扣费）
@@ -391,6 +392,124 @@ const SAMPLE = [
   check('普通用户访问审计接口返回 403', userAudit.status === 403);
   const userRevert = await api('/api/admin/revert', { method: 'POST', body: JSON.stringify({ oplogId: 1 }) });
   check('普通用户不能执行撤回', userRevert.status === 403);
+
+  /* ============ 推理题执行验证（D1） ============
+   * 这一节守的是"该给才给"：run_code 跑的是模型临场生成的代码，
+   * 沙箱不可用时**必须不给**（宁可不给，也不在本机跑它）。 */
+  section('推理题执行验证（D1：run_code 工具与沙箱门禁）');
+  /* 这一节会临时改环境变量（要分别验"开关关着/开着"两种情况），所以先全部存起来，
+   * 结束时一律恢复 —— 而且断言要**自给自足**：整套测试会在"默认模式"和
+   * "QF_TOOLS=1 QF_TOOLS_RUN=1 模式"各跑一遍（项目惯例），断言不能依赖外部开关状态。 */
+  const oldTools = process.env.QF_TOOLS, oldRun = process.env.QF_TOOLS_RUN, oldDocker = process.env.QF_DOCKER;
+  const restoreEnv = () => {
+    [['QF_TOOLS', oldTools], ['QF_TOOLS_RUN', oldRun], ['QF_DOCKER', oldDocker]].forEach(([k, v]) => {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    });
+  };
+  check('算法/推演题会被判为"需要 run_code"', Agent.needsRunCode({ type: 'algo', stem: '设计算法求二叉树的最大宽度' }) === true);
+  check('选择题里的推演题也算（出栈序列类）',
+    Agent.needsRunCode({ type: 'mcq', stem: '若入栈顺序为 1,2,3，则不可能的出栈序列是？', options: ['123', '321', '312', '231'] }) === true);
+  check('纯概念题不会被给 run_code',
+    Agent.needsRunCode({ type: 'mcq', stem: '下列排序算法中哪个是稳定的？', options: ['快排', '希尔', '归并', '堆排'] }) === false);
+  delete process.env.QF_TOOLS; delete process.env.QF_TOOLS_RUN;
+  check('两个开关都关着时不给（默认行为完全不变）',
+    (await Agent.runToolPlan({ type: 'algo', stem: 'x' }, { refresh: true })).reason === 'disabled');
+  process.env.QF_TOOLS = '1';      // 总开关
+  check('只开总开关、没开 QF_TOOLS_RUN 时也不给（run_code 要显式开启）',
+    (await Agent.runToolPlan({ type: 'algo', stem: 'x' }, { refresh: true })).reason === 'disabled');
+  process.env.QF_TOOLS_RUN = '1';
+  process.env.QF_DOCKER = 'definitely-not-a-real-docker-binary';
+  const planNo = await Agent.runToolPlan({ type: 'algo', stem: 'x' }, { refresh: true });
+  check('★ 开关开着但沙箱不可用时**不给** run_code（宁可不给，也不在本机跑模型临场生成的代码）',
+    planNo.use === false && planNo.reason === 'sandbox-unavailable' && /找不到 docker/.test(planNo.detail || ''),
+    JSON.stringify(planNo));
+  /* "连沙箱都不探"要这样验：开关都开着 + docker 命令是假的。
+   * 若它真去探了，reason 会是 sandbox-unavailable；只有先过判据才会是 not-needed。 */
+  const planSkip = await Agent.runToolPlan({ type: 'mcq', stem: '概念题' }, { refresh: true });
+  check('不需要推演的题直接跳过（连沙箱都不探）', planSkip.reason === 'not-needed', JSON.stringify(planSkip));
+  restoreEnv();
+
+  /* ============ 题集评测接口（② 模型评测框架阶段 3） ============
+   * 这一节守三件事：① 页面渲染要的元数据齐（题集/岗位/最近报告）② 预估接口真的会算钱
+   * ③ 模拟跑真的能出报告，且**绝不出网**（测试服务是 QF_MOCK，但评测的模拟由 real 开关决定，
+   *    这里显式不传 real —— 若哪天有人把默认值写反了，这条会立刻变红并烧掉真钱）。 */
+  section('题集评测接口（题集 × 判分 × 模型）');
+  const sqMeta = await api('/api/eval/suites', {}, 'admin');
+  check('列出题集', sqMeta.status === 200 && (sqMeta.d.suites || []).length >= 2, 'HTTP ' + sqMeta.status);
+  check('题集带判分方式与题量', (sqMeta.d.suites || []).every(s => s.judge && s.items > 0));
+  check('列出可选模型岗位（含能否可用）', (sqMeta.d.models || []).length >= 2 && sqMeta.d.models.every(m => m.role && 'usable' in m));
+  check('返回代码运行器状态（页面要提示有没有 gcc）', typeof sqMeta.d.runner.gcc === 'boolean');
+  const asUserSq = await api('/api/eval/suites', {}, 'user');
+  check('普通用户看不到题集评测接口（403）', asUserSq.status === 403);
+
+  const estBody = { suiteId: 'cread', models: ['generator'], repeats: 1, limit: 4 };
+  const est = await api('/api/eval/suite/estimate', { method: 'POST', body: JSON.stringify(estBody) }, 'admin');
+  check('预估接口返回费用与调用次数', est.status === 200 && est.d.estimate.calls === 4 && est.d.estimate.total > 0,
+    JSON.stringify({ calls: est.d && est.d.estimate && est.d.estimate.calls, total: est.d && est.d.estimate && est.d.estimate.total }));
+  check('预估接口不跑题（不给准确率，只给钱）', !est.d.estimate.models && est.d.plan.items === 4);
+  const estBad = await api('/api/eval/suite/estimate', { method: 'POST', body: JSON.stringify({ suiteId: '不存在的题集' }) }, 'admin');
+  check('未知题集回 400（不是 500）', estBad.status === 400, 'HTTP ' + estBad.status);
+
+  const noConfirm = await api('/api/eval/suite/run', { method: 'POST', body: JSON.stringify({ ...estBody, real: true }) }, 'admin');
+  check('★ 真实跑不确认（缺 confirm）会被挡下 —— 防误触花钱的闸门', noConfirm.status === 400 && /确认/.test(noConfirm.d.error || ''), noConfirm.d.error);
+
+  const mockRun = await api('/api/eval/suite/run', { method: 'POST', body: JSON.stringify(estBody) }, 'admin');
+  check('★ 模拟跑能出完整报告（markdown + 指标）', mockRun.status === 200 && /指标对比/.test(mockRun.d.md || ''), 'HTTP ' + mockRun.status);
+  check('模拟跑标明是模拟数据、且不落盘', mockRun.d.mode === 'mock' && mockRun.d.saved === false);
+  check('模拟跑的报告含分组与选型建议', /选型建议/.test(mockRun.d.md) && Array.isArray(mockRun.d.report.models));
+  const mockRun2 = await api('/api/eval/suite/run', { method: 'POST', body: JSON.stringify({ suiteId: 'calgo', models: ['generator'], limit: 3 }) }, 'admin');
+  check('另一套题集（exec 判分）也能在页面上跑通', mockRun2.status === 200 && /exec/.test(mockRun2.d.md || ''), 'HTTP ' + mockRun2.status);
+  const emptyModels = await api('/api/eval/suite/run', { method: 'POST', body: JSON.stringify({ suiteId: 'calgo', models: [] }) }, 'admin');
+  check('不勾任何模型 → 400 且提示清楚', emptyModels.status === 400 && /至少/.test(emptyModels.d.error || ''), emptyModels.d.error);
+
+  /* ============ 按评测结果绑岗位（阶段四：写 config 的敏感操作） ============
+   * 这一节守的是"不许把配置改坏"：四道校验 + 缺 confirm 一律拒绝 + 只允许绑报告里出现过的组合。 */
+  section('按评测结果绑定岗位（阶段四）');
+  const APPLY = '/api/eval/suite/apply';
+  const baseApply = { role: 'verifier2', providerId: 'tp_main', model: 'deepseek-chat' };
+  const noConfirmApply = await api(APPLY, { method: 'POST', body: JSON.stringify(baseApply) }, 'admin');
+  check('★ 缺 confirm 的绑定请求被拒绝', noConfirmApply.status === 400 && /确认/.test(noConfirmApply.d.error || ''), noConfirmApply.d.error);
+  const asUserApply = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, confirm: true }) }, 'user');
+  check('普通用户不能改岗位绑定（403）', asUserApply.status === 403);
+  const badRole = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, role: '不存在的岗位', confirm: true }) }, 'admin');
+  check('未知岗位 → 400', badRole.status === 400 && /未知岗位/.test(badRole.d.error || ''), badRole.d.error);
+  const badProv = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, providerId: 'nope', confirm: true }) }, 'admin');
+  check('未知供应商 → 400', badProv.status === 400 && /未知供应商/.test(badProv.d.error || ''), badProv.d.error);
+  const noKeyProv = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, providerId: 'tp_nokey', confirm: true }) }, 'admin');
+  check('★ 没有 Key 的供应商不能绑（否则该岗位直接不可用）', noKeyProv.status === 400 && /API Key/.test(noKeyProv.d.error || ''), noKeyProv.d.error);
+  const missingRep = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, reportId: 'suite_nope', confirm: true }) }, 'admin');
+  check('报告不存在 → 400（不许脱离报告凭空绑）', missingRep.status === 400 && /找不到那份评测报告/.test(missingRep.d.error || ''), missingRep.d.error);
+
+  /* 造一份"报告"来验对账逻辑（不强跑一次真评测：那要花钱） */
+  const suitesDir = path.join(process.env.QF_DATA_DIR || path.join(__dirname, 'data'), 'evals', 'suites');
+  require('fs').mkdirSync(suitesDir, { recursive: true });
+  const fakeRep = path.join(suitesDir, 'suite_featuretest.json');
+  require('fs').writeFileSync(fakeRep, JSON.stringify({
+    id: 'suite_featuretest', ts: Date.now(), judge: 'structured', samples: 20, mode: 'real', repeats: 1, runner: 'stub',
+    suite: { id: 'cread', title: '测试用', judge: 'structured', items: 20, groups: [] },
+    models: [{ role: 'verifier2', label: '质检员B', providerId: 'tp_main', provider: '测试主供应商', model: 'deepseek-chat', accuracy: 90 }],
+    recommend: { rows: [{ role: 'verifier2', label: '质检员B', model: 'deepseek-chat', provider: '测试主供应商', accuracy: 90, costPerItem: 0.001, msP95: 900, reason: '测试' }], notes: [] }
+  }), 'utf8');
+  const offReport = await api(APPLY, { method: 'POST', body: JSON.stringify({ role: 'verifier1', providerId: 'tp_alt', model: 'glm-4-flash', reportId: 'suite_featuretest', confirm: true }) }, 'admin');
+  check('★ 报告里没有的"岗位×供应商×模型"组合被拒绝（防前端传任意值）',
+    offReport.status === 400 && /只允许按评测跑过的组合/.test(offReport.d.error || ''), offReport.d.error);
+
+  const beforeCfg = JSON.parse(require('fs').readFileSync(path.join(process.env.QF_DATA_DIR || path.join(__dirname, 'data'), 'config.json'), 'utf8'));
+  const beforeV2 = (beforeCfg.profiles.verifier2 || {});
+  const okApply = await api(APPLY, { method: 'POST', body: JSON.stringify({ ...baseApply, reportId: 'suite_featuretest', confirm: true }) }, 'admin');
+  check('★ 报告里有的组合：绑定成功', okApply.status === 200 && okApply.d.ok === true, JSON.stringify(okApply.d).slice(0, 160));
+  const cfgAfter = JSON.parse(require('fs').readFileSync(path.join(process.env.QF_DATA_DIR || path.join(__dirname, 'data'), 'config.json'), 'utf8'));
+  check('★ 配置真的写进去了（岗位绑到目标供应商 + 写死模型名）',
+    JSON.stringify(cfgAfter.profiles.verifier2.providerIds) === JSON.stringify(['tp_main'])
+    && cfgAfter.profiles.verifier2.modelOverride === 'deepseek-chat');
+  check('返回了改动前的绑定（页面据此提供"恢复原绑定"）',
+    JSON.stringify(okApply.d.before.providerIds) === JSON.stringify(beforeV2.providerIds || []), JSON.stringify(okApply.d.before));
+  const restored = await api(APPLY, { method: 'POST', body: JSON.stringify({ role: 'verifier2', providerId: 'tp_alt', model: '', clearOverride: true, confirm: true }) }, 'admin');
+  const cfgRestored = JSON.parse(require('fs').readFileSync(path.join(process.env.QF_DATA_DIR || path.join(__dirname, 'data'), 'config.json'), 'utf8'));
+  check('★ 恢复原绑定：回到原供应商、modelOverride 清空（原状态是"用供应商默认模型"）',
+    restored.status === 200 && JSON.stringify(cfgRestored.profiles.verifier2.providerIds) === JSON.stringify(beforeV2.providerIds || [])
+    && (cfgRestored.profiles.verifier2.modelOverride || '') === (beforeV2.modelOverride || ''));
+  require('fs').unlinkSync(fakeRep);
 
   /* ============ 汇总 ============ */
   console.log('\n' + '='.repeat(56));

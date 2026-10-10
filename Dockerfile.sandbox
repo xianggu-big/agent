@@ -1,0 +1,22 @@
+# 代码沙箱镜像（评测里"编译并运行模型生成的代码"那一环用）
+#
+# 为什么单独一个 Dockerfile：应用镜像（./Dockerfile）装的是 node+python，要跑 PDF/OCR；
+# 沙箱只需要一个 C 编译器 + shell，**而且必须尽量小、尽量少东西** —— 容器里东西越少，
+# 模型生成的代码能碰到的东西就越少。
+#
+# 构建（只需一次；基础镜像 gcc:13 约 1.4GB）：
+#   docker build -f Dockerfile.sandbox -t qf-sandbox <一个空目录>      # 不需要构建上下文
+#
+# 用法（默认不开沙箱，走本机 gcc）：
+#   QF_SANDBOX=docker node evalsuite_run.js --suite calgo --models generator --limit 3
+#
+# 隔离靠运行时参数（见 lib/evalsuite.js 的 dockerArgs），不是靠这个文件：
+#   --network=none（断网）/ --read-only + tmpfs（写不出宿主机）/ --memory/--cpus/--pids-limit（限额）
+#   --cap-drop=ALL + --user 10001（不提权）/ --rm + 一题一容器（不留状态）
+FROM gcc:13
+
+# 非 root 用户：容器里的程序以它运行（dockerArgs 也会再指定一次 --user 10001:10001）
+RUN useradd -m -u 10001 sandbox
+
+USER sandbox
+WORKDIR /w

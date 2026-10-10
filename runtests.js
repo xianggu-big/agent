@@ -73,6 +73,9 @@ async function runStep(label, cmd, args, env) {
    * —— 因为这个工具将来会通过对外 API / MCP 暴露给外部调用方。 */
   if (!await runStep('工具层自测（表达式求值 + 安全回归）', process.execPath, ['tools_test.js'])) { /* 继续 */ }
   if (!await runStep('有界工具循环自测（请求/响应纯函数 + 四条路径）', process.execPath, ['solve_test.js'])) { /* 继续 */ }
+  /* 模型评测框架：题集校验、exec/structured/judge 三种判分、模拟链路零出网。
+   * 用独立的 data/test-env-suite 配置（假 Key），绝不读生产配置、绝不出网。 */
+  if (!await runStep('模型评测框架自测（题集校验/判分/零出网/真编译）', process.execPath, ['evalsuite_test.js'])) { /* 继续 */ }
 
   /* 2. 启动独立测试服务 */
   log('\n' + '━'.repeat(64));
@@ -87,7 +90,10 @@ async function runStep(label, cmd, args, env) {
     concurrency: { global: 8, perProvider: 4, cooldownSec: 30 },
     providers: [
       { id: 'tp_main', name: '测试主供应商', baseUrl: 'https://api.deepseek.com', apiKey: 'sk-test-mock-0000000000', priceIn: 2, priceOut: 8, enabled: true, note: '测试用' },
-      { id: 'tp_alt', name: '测试副供应商', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKey: 'test-mock-alt-0000000000', priceIn: 1, priceOut: 1, enabled: true, note: '测试用' }
+      { id: 'tp_alt', name: '测试副供应商', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKey: 'test-mock-alt-0000000000', priceIn: 1, priceOut: 1, enabled: true, note: '测试用' },
+      /* 没配 Key 的供应商：专门给"按评测结果绑岗位"那条接口做反例（绑到它会让岗位直接不可用，
+       * 所以必须被挡下）。它不参与任何正常调用。 */
+      { id: 'tp_nokey', name: '测试无Key供应商', baseUrl: 'https://example.invalid', apiKey: '', priceIn: 1, priceOut: 1, enabled: true, note: '测试反例用' }
     ],
     profiles: {
       generator: { label: '出题员', model: 'deepseek-chat', providerIds: ['tp_main'] },
